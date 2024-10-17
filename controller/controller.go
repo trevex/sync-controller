@@ -25,7 +25,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"strconv"
 	"strings"
 
@@ -34,13 +33,14 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -69,9 +69,9 @@ const (
 	logKeyLocalGeneration = "localGeneration"
 
 	// fieldStatus is the struct field name containing the sync resource's status struct.
-	fieldStatus = "Status"
+	fieldStatus = "status"
 	// fieldSpec is the struct field name containing the sync resource's spec struct.
-	fieldSpec = "Spec"
+	fieldSpec = "spec"
 
 	// AnnotationPaused is the annotation used to pause the controller (on either local or remote resource).
 	AnnotationPaused = "cloud.teleport.dev/paused"
@@ -102,7 +102,7 @@ type Reconciler struct {
 	// Scheme is the Kubernetes scheme
 	Scheme *runtime.Scheme
 	// Resource specifies the GVK to sync. MUST have Spec and Status struct fields.
-	Resource client.Object
+	GroupVersionKind schema.GroupVersionKind
 	// RemoteResourceSuffix specifies a suffix to append to all remote resources.
 	// Sync-controller ignores remote resources without this suffix.
 	// It is removed from the locally created sync resource.
@@ -138,11 +138,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 		return ctrl.Result{}, nil
 	}
 
-	remote := r.Resource.DeepCopyObject().(client.Object)
+	remote := &unstructured.Unstructured{}
+	remote.SetGroupVersionKind(r.GroupVersionKind)
 	remote.SetName(req.Name + r.RemoteResourceSuffix)
 	remote.SetNamespace(req.Namespace)
 
-	local := r.Resource.DeepCopyObject().(client.Object)
+	local := &unstructured.Unstructured{}
+	local.SetGroupVersionKind(r.GroupVersionKind)
 	local.SetName(req.Name)
 	local.SetNamespace(req.Namespace + r.LocalNamespaceSuffix)
 	localNs := &corev1.Namespace{
@@ -284,27 +286,29 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (res ctrl.
 // SetupWithManager sets up the controller with the Manager.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	name := "sync"
-	gvk, err := apiutil.GVKForObject(r.Resource, r.Scheme)
-	if kind := strings.ToLower(gvk.Kind); err == nil && kind != "" {
+	if kind := strings.ToLower(r.GroupVersionKind.Kind); kind != "" {
 		name += "-" + kind
 	}
+	res := &unstructured.Unstructured{}
+	res.SetGroupVersionKind(r.GroupVersionKind)
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		// Translate matching local resources into local resource reconcile requests
-		Watches(&source.Kind{Type: r.Resource}, // Remote cluster
+		Watches(res, // Remote cluster
 			handler.EnqueueRequestsFromMapFunc(r.translateLocal),
 		).
 		// Translate matching remote resources into local resource reconcile requests
-		Watches(source.NewKindWithCache(r.Resource, r.RemoteCache), // Remote cluster
+		WatchesRawSource(source.Kind(r.RemoteCache, res), // Remote cluster
 			handler.EnqueueRequestsFromMapFunc(r.translateRemote),
 		).
 		// Reconcile on namespaces with owner annotations to protect against orphan namespaces
-		Watches(&source.Kind{Type: &corev1.Namespace{}},
+		Watches(&corev1.Namespace{},
 			handler.EnqueueRequestsFromMapFunc(r.translateNamespace),
 		).
 		// Sync specified secrets on update
-		Watches(&source.Kind{Type: &corev1.Secret{}},
-			&handler.EnqueueRequestForOwner{OwnerType: r.Resource, IsController: true},
+		Watches(&corev1.Secret{},
+			handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), res, handler.OnlyControllerOwner()),
 			builder.WithPredicates(predicate.NewPredicateFuncs(r.filterLocalSecrets)),
 		).
 		WithOptions(controller.Options{
@@ -314,7 +318,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 // translateLocal translates local object name requests to local object names
-func (r *Reconciler) translateLocal(obj client.Object) []reconcile.Request {
+func (r *Reconciler) translateLocal(ctx context.Context, obj client.Object) []reconcile.Request {
 	name := obj.GetName()
 	namespace := obj.GetNamespace()
 	if !strings.HasPrefix(namespace, r.NamespacePrefix) ||
@@ -329,7 +333,7 @@ func (r *Reconciler) translateLocal(obj client.Object) []reconcile.Request {
 }
 
 // translateRemote translates remote object name requests to local object names
-func (r *Reconciler) translateRemote(obj client.Object) []reconcile.Request {
+func (r *Reconciler) translateRemote(ctx context.Context, obj client.Object) []reconcile.Request {
 	name := obj.GetName()
 	namespace := obj.GetNamespace()
 	if !strings.HasPrefix(namespace, r.NamespacePrefix) ||
@@ -343,7 +347,7 @@ func (r *Reconciler) translateRemote(obj client.Object) []reconcile.Request {
 	}}}
 }
 
-func (r *Reconciler) translateNamespace(obj client.Object) []reconcile.Request {
+func (r *Reconciler) translateNamespace(ctx context.Context, obj client.Object) []reconcile.Request {
 	namespace := obj.GetName()
 	if !strings.HasPrefix(namespace, r.NamespacePrefix) {
 		return nil
@@ -417,7 +421,7 @@ func (r *Reconciler) removeFinalizer(ctx context.Context, remote client.Object) 
 }
 
 // syncRemote uploads the local resource's status and secrets to the remote cluster.
-func (r *Reconciler) syncRemote(ctx context.Context, local, remote client.Object) error {
+func (r *Reconciler) syncRemote(ctx context.Context, local, remote *unstructured.Unstructured) error {
 	log := log.FromContext(ctx)
 
 	// If local exists (even if being deleted), write its status to remote.
@@ -430,11 +434,11 @@ func (r *Reconciler) syncRemote(ctx context.Context, local, remote client.Object
 	}
 
 	statusRemote := getField(remote, fieldStatus)
-	statusLocal := getField(local.DeepCopyObject(), fieldStatus)
+	statusLocal := getField(local, fieldStatus)
 	if !equality.Semantic.DeepEqual(statusRemote, statusLocal) {
 		// Using real remote would skip validations (e.g., pause annotation)
 		// if the remote is reused later.
-		remoteC := remote.DeepCopyObject().(client.Object)
+		remoteC := remote.DeepCopyObject().(*unstructured.Unstructured)
 		patch := client.MergeFrom(remoteC.DeepCopyObject().(client.Object))
 		ok := setField(remoteC, fieldStatus, statusLocal)
 		if !ok {
@@ -454,7 +458,7 @@ func (r *Reconciler) syncRemote(ctx context.Context, local, remote client.Object
 
 // syncLocal downloads the remote resource's spec to the local cluster.
 // This method updates both local and remote in-place to their final values.
-func (r *Reconciler) syncLocal(ctx context.Context, localNs *corev1.Namespace, local, remote client.Object) error {
+func (r *Reconciler) syncLocal(ctx context.Context, localNs *corev1.Namespace, local, remote *unstructured.Unstructured) error {
 	log := log.FromContext(ctx)
 
 	// Create namespace if missing
@@ -648,23 +652,13 @@ func objHash(o any) (string, error) {
 }
 
 // getField retries a field from a struct or struct pointer using reflection.
-func getField(s any, field string) any {
-	r := reflect.ValueOf(s)
-	f := reflect.Indirect(r).FieldByName(field)
-	return f.Interface()
+func getField(s *unstructured.Unstructured, field string) any {
+	return s.Object[field]
 }
 
 // setField sets a field on a struct pointer.
-func setField(s any, field string, v any) (ok bool) {
-	e := reflect.ValueOf(s).Elem()
-	if e.Kind() != reflect.Struct {
-		return false
-	}
-	f := e.FieldByName(field)
-	if !f.IsValid() || !f.CanSet() {
-		return false
-	}
-	f.Set(reflect.ValueOf(v))
+func setField(s *unstructured.Unstructured, field string, v any) (ok bool) {
+	s.Object[field] = v
 	return true
 }
 

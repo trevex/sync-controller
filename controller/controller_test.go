@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -14,7 +15,9 @@ import (
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -55,10 +58,14 @@ func TestSync(t *testing.T) {
 	}
 
 	r := &Reconciler{
-		Client:                 testClient,
-		RemoteClient:           testClient,
-		Scheme:                 testScheme,
-		Resource:               &policyv1.PodDisruptionBudget{},
+		Client:       testClient,
+		RemoteClient: testClient,
+		Scheme:       testScheme,
+		GroupVersionKind: schema.GroupVersionKind{
+			Group:   "policy",
+			Version: "v1",
+			Kind:    "PodDisruptionBudget",
+		},
 		RemoteResourceSuffix:   "-remote-rs",
 		LocalNamespaceSuffix:   "-local-ns",
 		LocalSecretNames:       []string{"secret1", "secret2"},
@@ -446,9 +453,9 @@ func TestSync(t *testing.T) {
 			// Generate request
 			var req reconcile.Request
 			if tc.remoteIn != nil {
-				req = r.translateRemote(tc.remoteIn)[0]
+				req = r.translateRemote(context.TODO(), tc.remoteIn)[0]
 			} else if tc.localIn != nil {
-				req = r.translateLocal(tc.localIn)[0]
+				req = r.translateLocal(context.TODO(), tc.localIn)[0]
 			}
 
 			// Reconcile for finalizer
@@ -514,7 +521,9 @@ func TestSync(t *testing.T) {
 			}
 			if !localNs.DeletionTimestamp.IsZero() {
 				name, namespace := localOut.GetName(), localOut.GetNamespace()
-				localOut = r.Resource.DeepCopyObject().(client.Object)
+				u := &unstructured.Unstructured{}
+				u.SetGroupVersionKind(r.GroupVersionKind)
+				localOut = u
 				localOut.SetName(name)
 				localOut.SetNamespace(namespace)
 			}
@@ -577,11 +586,11 @@ func setupTestCase(t *testing.T, ctx context.Context, cfg *setupConfig) (remoteN
 	if cfg.localIn != nil {
 		cfg.localIn.SetName("test")
 		cfg.localIn.SetNamespace(localNs.Name)
-		status := getField(cfg.localIn.DeepCopyObject(), fieldStatus)
+		status := getField(toUnstructured(cfg.localIn.DeepCopyObject()), fieldStatus)
 		if err := cfg.client.Create(ctx, cfg.localIn); err != nil {
 			t.Fatal(err)
 		}
-		setField(cfg.localIn, fieldStatus, status)
+		setFieldStructured(cfg.localIn, fieldStatus, status)
 		if err := cfg.client.Status().Update(ctx, cfg.localIn); err != nil {
 			t.Fatal(err)
 		}
@@ -590,11 +599,11 @@ func setupTestCase(t *testing.T, ctx context.Context, cfg *setupConfig) (remoteN
 		cfg.remoteIn.SetName("test" + cfg.remoteResourceSuffix)
 		cfg.remoteIn.SetNamespace(remoteNs.Name)
 
-		status := getField(cfg.remoteIn.DeepCopyObject(), fieldStatus)
+		status := getField(toUnstructured(cfg.remoteIn.DeepCopyObject()), fieldStatus)
 		if err := cfg.client.Create(ctx, cfg.remoteIn); err != nil {
 			t.Fatal(err)
 		}
-		setField(cfg.remoteIn, fieldStatus, status)
+		setFieldStructured(cfg.remoteIn, fieldStatus, status)
 		if err := cfg.client.Status().Update(ctx, cfg.remoteIn); err != nil {
 			t.Fatal(err)
 		}
@@ -657,4 +666,34 @@ func filterSecrets(secrets []corev1.Secret, owner client.Object) []*corev1.Secre
 func toIntstr(v int) *intstr.IntOrString {
 	i := intstr.FromInt(v)
 	return &i
+}
+
+func toUnstructured(obj any) *unstructured.Unstructured {
+	u := &unstructured.Unstructured{}
+	var tmp []byte
+	tmp, err := json.Marshal(obj)
+	if err != nil {
+		panic(err) // TODO
+	}
+	err = u.UnmarshalJSON(tmp)
+	return u
+}
+
+func fromUnstructured(u *unstructured.Unstructured, obj any) (err error) {
+	var tmp []byte
+	tmp, err = u.MarshalJSON()
+	if err != nil {
+		return
+	}
+	err = json.Unmarshal(tmp, obj)
+	return
+}
+
+func setFieldStructured(obj any, field string, v any) {
+	tmp := toUnstructured(obj)
+	setField(tmp, field, v)
+	err := fromUnstructured(tmp, obj)
+	if err != nil {
+		panic(err) // TODO
+	}
 }
