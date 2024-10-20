@@ -289,17 +289,17 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if kind := strings.ToLower(r.GroupVersionKind.Kind); kind != "" {
 		name += "-" + kind
 	}
-	res := &unstructured.Unstructured{}
-	res.SetGroupVersionKind(r.GroupVersionKind)
+	resource := &unstructured.Unstructured{}
+	resource.SetGroupVersionKind(r.GroupVersionKind)
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		// Translate matching local resources into local resource reconcile requests
-		Watches(res, // Remote cluster
+		Watches(resource, // Local cluster
 			handler.EnqueueRequestsFromMapFunc(r.translateLocal),
 		).
 		// Translate matching remote resources into local resource reconcile requests
-		WatchesRawSource(source.Kind(r.RemoteCache, res), // Remote cluster
+		WatchesRawSource(source.Kind(r.RemoteCache, resource), // Remote cluster
 			handler.EnqueueRequestsFromMapFunc(r.translateRemote),
 		).
 		// Reconcile on namespaces with owner annotations to protect against orphan namespaces
@@ -308,7 +308,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 		).
 		// Sync specified secrets on update
 		Watches(&corev1.Secret{},
-			handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), res, handler.OnlyControllerOwner()),
+			handler.EnqueueRequestForOwner(r.Scheme, mgr.GetRESTMapper(), resource, handler.OnlyControllerOwner()),
 			builder.WithPredicates(predicate.NewPredicateFuncs(r.filterLocalSecrets)),
 		).
 		WithOptions(controller.Options{

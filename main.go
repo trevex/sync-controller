@@ -107,6 +107,9 @@ func main() {
 
 	remoteCluster, err := cluster.New(remoteConfig, func(options *cluster.Options) {
 		options.Scheme = scheme
+		options.Client.Cache = &client.CacheOptions{
+			Unstructured: true,
+		}
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to create remote cluster")
@@ -118,7 +121,12 @@ func main() {
 		os.Exit(1)
 	}
 	mgr, err := ctrl.NewManager(localConfig, ctrl.Options{
-		Scheme:                 scheme,
+		Scheme: scheme,
+		Client: client.Options{
+			Cache: &client.CacheOptions{
+				Unstructured: true,
+			},
+		},
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       fmt.Sprintf("%s.%s.%s", strings.ToLower(kind), version, group),
