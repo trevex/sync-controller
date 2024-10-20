@@ -291,17 +291,16 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	resource := &unstructured.Unstructured{}
 	resource.SetGroupVersionKind(r.GroupVersionKind)
+	var object client.Object = resource
 
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		// Translate matching local resources into local resource reconcile requests
-		Watches(resource, // Local cluster
+		Watches(object, // Local cluster
 			handler.EnqueueRequestsFromMapFunc(r.translateLocal),
 		).
 		// Translate matching remote resources into local resource reconcile requests
-		WatchesRawSource(source.Kind(r.RemoteCache, resource), // Remote cluster
-			handler.EnqueueRequestsFromMapFunc(r.translateRemote),
-		).
+		WatchesRawSource(source.Kind(r.RemoteCache, object, handler.EnqueueRequestsFromMapFunc(r.translateRemote))).
 		// Reconcile on namespaces with owner annotations to protect against orphan namespaces
 		Watches(&corev1.Namespace{},
 			handler.EnqueueRequestsFromMapFunc(r.translateNamespace),
