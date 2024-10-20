@@ -101,7 +101,7 @@ func main() {
 		Scheme:                 scheme,
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "TODO",
+		LeaderElectionID:       fmt.Sprintf("%s.%s.%s", kind, version, group),
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
