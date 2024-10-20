@@ -8,6 +8,7 @@ import (
 
 	sync "github.com/gravitational/sync-controller/controller"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -19,6 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	ctrlscheme "sigs.k8s.io/controller-runtime/pkg/scheme"
 )
 
 var (
@@ -86,6 +88,23 @@ func main() {
 		os.Exit(1)
 	}
 
+	gvk := schema.GroupVersionKind{
+		Group:   group,
+		Version: version,
+		Kind:    kind,
+	}
+	schemeBuilder := &ctrlscheme.Builder{GroupVersion: schema.GroupVersion{Group: group, Version: version}}
+	resource := &unstructured.Unstructured{}
+	resource.SetGroupVersionKind(gvk)
+	list := &unstructured.UnstructuredList{}
+	list.SetGroupVersionKind(gvk)
+	schemeBuilder.Register(resource, list)
+	err = schemeBuilder.AddToScheme(scheme)
+	if err != nil {
+		setupLog.Error(err, "unable to add GVK to scheme")
+		os.Exit(1)
+	}
+
 	remoteCluster, err := cluster.New(remoteConfig, func(options *cluster.Options) {
 		options.Scheme = scheme
 	})
@@ -109,15 +128,11 @@ func main() {
 		os.Exit(1)
 	}
 	syncReconciler := &sync.Reconciler{
-		Client:       mgr.GetClient(),
-		RemoteClient: remoteCluster.GetClient(),
-		RemoteCache:  remoteCluster.GetCache(),
-		Scheme:       mgr.GetScheme(),
-		GroupVersionKind: schema.GroupVersionKind{
-			Group:   group,
-			Version: version,
-			Kind:    kind,
-		},
+		Client:                 mgr.GetClient(),
+		RemoteClient:           remoteCluster.GetClient(),
+		RemoteCache:            remoteCluster.GetCache(),
+		Scheme:                 mgr.GetScheme(),
+		GroupVersionKind:       gvk,
 		RemoteResourceSuffix:   remoteResourceSuffix,
 		LocalNamespaceSuffix:   localNamespaceSuffix,
 		NamespacePrefix:        namespacePrefix,
