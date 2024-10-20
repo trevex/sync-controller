@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	sync "github.com/gravitational/sync-controller/controller"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -101,7 +102,7 @@ func main() {
 		Scheme:                 scheme,
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       fmt.Sprintf("%s.%s.%s", kind, version, group),
+		LeaderElectionID:       fmt.Sprintf("%s.%s.%s", strings.ToLower(kind), version, group),
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
