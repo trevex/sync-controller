@@ -8,7 +8,6 @@ import (
 
 	sync "github.com/gravitational/sync-controller/controller"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -20,7 +19,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cluster"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
-	ctrlscheme "sigs.k8s.io/controller-runtime/pkg/scheme"
 )
 
 var (
@@ -93,17 +91,17 @@ func main() {
 		Version: version,
 		Kind:    kind,
 	}
-	schemeBuilder := &ctrlscheme.Builder{GroupVersion: schema.GroupVersion{Group: group, Version: version}}
-	resource := &unstructured.Unstructured{}
-	resource.SetGroupVersionKind(gvk)
-	list := &unstructured.UnstructuredList{}
-	list.SetGroupVersionKind(gvk)
-	schemeBuilder.Register(resource, list)
-	err = schemeBuilder.AddToScheme(scheme)
-	if err != nil {
-		setupLog.Error(err, "unable to add GVK to scheme")
-		os.Exit(1)
-	}
+	// schemeBuilder := &ctrlscheme.Builder{GroupVersion: schema.GroupVersion{Group: group, Version: version}}
+	// resource := &unstructured.Unstructured{}
+	// resource.SetGroupVersionKind(gvk)
+	// list := &unstructured.UnstructuredList{}
+	// list.SetGroupVersionKind(gvk)
+	// schemeBuilder.Register(resource, list)
+	// err = schemeBuilder.AddToScheme(scheme)
+	// if err != nil {
+	// 	setupLog.Error(err, "unable to add GVK to scheme")
+	// 	os.Exit(1)
+	// }
 
 	remoteCluster, err := cluster.New(remoteConfig, func(options *cluster.Options) {
 		options.Scheme = scheme
@@ -133,6 +131,11 @@ func main() {
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
+		os.Exit(1)
+	}
+	err = mgr.Add(remoteCluster)
+	if err != nil {
+		setupLog.Error(err, "unable to add remote cluster")
 		os.Exit(1)
 	}
 	syncReconciler := &sync.Reconciler{
