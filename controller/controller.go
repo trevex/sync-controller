@@ -486,8 +486,18 @@ func (r *Reconciler) syncLocal(ctx context.Context, localNs *corev1.Namespace, l
 		anno := remote.GetAnnotations()
 		delete(anno, AnnotationRemoteGeneration)
 		delete(anno, AnnotationLocalGeneration)
+		for k, v := range local.GetAnnotations() {
+			anno[k] = v
+		}
 		local.SetAnnotations(anno)
-		local.SetLabels(remote.GetLabels())
+		labels := remote.GetLabels()
+		if labels == nil {
+			labels = map[string]string{}
+		}
+		for k, v := range local.GetLabels() {
+			labels[k] = v
+		}
+		local.SetLabels(labels)
 		return nil
 	})
 	if err != nil {
