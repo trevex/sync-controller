@@ -150,6 +150,7 @@ func main() {
 		LocalSecretNames:       localSecretNames,
 		LocalPropagationPolicy: client.PropagationPolicy(metav1.DeletePropagationForeground),
 		ConcurrentReconciles:   1,
+		MergeIntoLocalSpec:     true,
 	}
 
 	if err := syncReconciler.SetupWithManager(mgr); err != nil {

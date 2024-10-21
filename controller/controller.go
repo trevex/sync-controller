@@ -126,6 +126,8 @@ type Reconciler struct {
 	LocalPropagationPolicy client.PropagationPolicy
 	// ConcurrentReconciles sets the number of concurrent reconciles.
 	ConcurrentReconciles int
+	//
+	MergeIntoLocalSpec bool
 }
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
@@ -479,24 +481,33 @@ func (r *Reconciler) syncLocal(ctx context.Context, localNs *corev1.Namespace, l
 	// Update is preferable to Patch, so we guarantee that spec never diverges.
 	// This also slows down spec updates in exchange for more granular status updates.
 	op, err := controllerutil.CreateOrUpdate(ctx, r.Client, local, func() error {
-		ok := setField(local, fieldSpec, getField(remote, fieldSpec))
+		remoteSpec := getField(remote, fieldSpec)
+		ok := false
+		if r.MergeIntoLocalSpec {
+			localSpec := getField(local, fieldSpec)
+			for k, v := range remoteSpec {
+				localSpec[k] = v
+			}
+		} else {
+			ok = setField(local, fieldSpec, remoteSpec)
+		}
 		if !ok {
 			return errors.New("cannot set spec, invalid struct")
 		}
 		anno := remote.GetAnnotations()
+		// for k, v := range local.GetAnnotations() {
+		// 	anno[k] = v
+		// }
 		delete(anno, AnnotationRemoteGeneration)
 		delete(anno, AnnotationLocalGeneration)
-		for k, v := range local.GetAnnotations() {
-			anno[k] = v
-		}
 		local.SetAnnotations(anno)
 		labels := remote.GetLabels()
-		if labels == nil {
-			labels = map[string]string{}
-		}
-		for k, v := range local.GetLabels() {
-			labels[k] = v
-		}
+		// if labels == nil {
+		// 	labels = map[string]string{}
+		// }
+		// for k, v := range local.GetLabels() {
+		// 	labels[k] = v
+		// }
 		local.SetLabels(labels)
 		return nil
 	})
@@ -661,8 +672,12 @@ func objHash(o any) (string, error) {
 }
 
 // getField retries a field from a struct or struct pointer using reflection.
-func getField(s *unstructured.Unstructured, field string) any {
-	return s.Object[field]
+func getField(s *unstructured.Unstructured, field string) map[string]any {
+	m, _, _ := unstructured.NestedMap(s.Object, field)
+	if m == nil {
+		return map[string]any{}
+	}
+	return m
 }
 
 // setField sets a field on a struct pointer.
