@@ -488,6 +488,7 @@ func (r *Reconciler) syncLocal(ctx context.Context, localNs *corev1.Namespace, l
 			for k, v := range remoteSpec {
 				localSpec[k] = v
 			}
+			ok = setField(local, fieldSpec, localSpec)
 		} else {
 			ok = setField(local, fieldSpec, remoteSpec)
 		}
